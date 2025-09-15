@@ -136,15 +136,11 @@ def render_sidebar(ss, pin_count, fixed_pin):
 
         st.divider()
         st.markdown("### 표시 옵션")
-        if ss.analysis_type == "User ID 분석" or ss.analysis_type == "Custom Query 분석":
-            if ss.df_base is not None:
-                render_options_sidebar(ss, pin_count, fixed_pin)
-            else:
-                st.info("먼저 '조회'를 실행하세요.")
-        elif ss.analysis_type == "RTP Timeout 분석":
-             st.info("RTP Timeout 분석에서는 표시 옵션을 사용할 수 없습니다.")
-        else: # Should not happen
+        # 모든 분석 유형에서 df_base가 있으면 표시 옵션을 렌더링
+        if ss.df_base is not None:
             render_options_sidebar(ss, pin_count, fixed_pin)
+        else:
+            st.info("먼저 '조회' 또는 '분석'을 실행하세요.")
 
     search_params = {
         "usr_id_value": usr_id,
