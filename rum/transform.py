@@ -253,6 +253,8 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
         active_ts, stopping_ts = None, None
         bye_method_source = "N/A"
         rtp_timeout_reason = "N/A"
+        send_packets = []
+        receive_health_check = []
         
         usr_id = "N/A"
         first_version = "N/A"
@@ -300,6 +302,15 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
                     bye_method_source = "recvMessage"
                 else:
                     bye_method_source = "Unknown"
+            
+            elif path == "/res/ENGINE_SendPackets" and len(send_packets) < 3:
+                count = event.get("attributes.context.totalCount")
+                if count is not None:
+                    send_packets.append(count)
+            elif path == "/res/ENGINE_ReceiveHealthCheck" and len(receive_health_check) < 3:
+                count = event.get("attributes.context.totalCount")
+                if count is not None:
+                    receive_health_check.append(count)
 
         duration_str = ""
         if stopping_ts and active_ts:
@@ -323,6 +334,8 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
             "통화 시간": duration_str,
             "BYE Reason": rtp_timeout_reason,
             "BYE 전달": bye_method_source,
+            "SendPackets 수": send_packets,
+            "ReceiveHealthCheck 수": receive_health_check,
             "usr.id": usr_id,
         })
 

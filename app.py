@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pytz
 import pandas as pd
 import pprint
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # RUM modules
 from rum.config import get_settings, get_default_hidden_columns
@@ -147,9 +148,7 @@ def handle_custom_query_search(client: DatadogAPIClient, params: dict):
 def handle_rtp_analysis(client: DatadogAPIClient, params: dict):
     """RTP Timeout 통화에 대한 2단계 분석을 수행합니다."""
     ss = st.session_state
-    ss.df_base = ss.df_view = ss.df_summary = None
-    ss.unique_call_ids = []
-
+    ss.df_summary = None # 통화 요약은 사용하지 않으므로 초기화
     api_params = params.copy()
     api_params.pop("analysis_type", None)
     api_params.pop("usr_id_value", None)
@@ -159,11 +158,11 @@ def handle_rtp_analysis(client: DatadogAPIClient, params: dict):
     rtp_reason_query = "@context.reason:(*RTP* OR *rtp*)"
     with st.spinner(f"1/2: RTP Timeout 이벤트 검색 중... (query: {rtp_reason_query})"):
         rtp_timeout_events = search_rum_events(client=client, query=rtp_reason_query, **api_params)
-        # pprint.pprint(rtp_timeout_events)
     
     if not rtp_timeout_events:
         st.info("해당 기간에 RTP Timeout으로 기록된 통화가 없습니다.")
         ss.df_rtp_summary = pd.DataFrame()
+        ss.df_base = ss.df_view = None
         return
 
     # build_rows_dynamic를 사용하여 Call ID를 통합
@@ -180,24 +179,61 @@ def handle_rtp_analysis(client: DatadogAPIClient, params: dict):
     if not call_ids:
         st.info("RTP Timeout 이벤트에서 Call ID를 찾을 수 없었습니다.")
         ss.df_rtp_summary = pd.DataFrame()
+        ss.df_base = ss.df_view = None
         return
 
     # 2단계: 수집된 Call ID로 전체 이벤트 검색
-    call_id_query_part = " OR ".join(f'"{cid}"' for cid in call_ids)
-    full_query = f'(@context.callID:({call_id_query_part}) OR @context.callId:({call_id_query_part}))'
-    
-    with st.spinner(f"2/2: {len(call_ids)}개 통화의 전체 이벤트 검색 중..."):
-        raw_events = search_rum_events(client=client, query=full_query, **api_params)
+    all_raw_events = []
+    call_id_list = list(call_ids)
+    batch_size = 50  # 쿼리 길이 제한을 피하기 위해 ID를 50개씩 나누어 처리
+
+    with st.spinner(f"2/2: {len(call_ids)}개 통화의 전체 이벤트 병렬 검색 중..."):
+        batches = [call_id_list[i:i+batch_size] for i in range(0, len(call_id_list), batch_size)]
+        
+        with ThreadPoolExecutor() as executor:
+            # 각 배치에 대한 API 호출 작업을 생성합니다.
+            future_to_batch = {
+                executor.submit(
+                    search_rum_events,
+                    client=client,
+                    query=f'(@context.callID:({" OR ".join(f"{cid}" for cid in batch)}) OR @context.callId:({" OR ".join(f"{cid}" for cid in batch)}))',
+                    **api_params
+                ): batch for batch in batches
+            }
+
+            # 완료되는 작업 순서대로 결과를 취합합니다.
+            for future in as_completed(future_to_batch):
+                all_raw_events.extend(future.result())
+
+    raw_events = all_raw_events
     st.toast(f"2/2: 총 {len(raw_events)}개의 관련 이벤트를 가져왔습니다.")
 
     if not raw_events:
         st.warning("RTP Timeout 통화 ID로 이벤트를 조회했으나, 결과를 가져오지 못했습니다.")
         ss.df_rtp_summary = pd.DataFrame()
+        ss.df_base = ss.df_view = None
         return
 
     with st.spinner("이벤트 데이터 변환 및 분석 중..."):
         flat_rows = build_rows_dynamic(raw_events, tz_name="Asia/Seoul")
         ss.df_rtp_summary = analyze_rtp_timeouts(flat_rows)
+        
+        # 원본 로그 데이터프레임도 생성
+        ss.df_base = to_base_dataframe(flat_rows)
+        all_cols = [c for c in ss.df_base.columns if c != "timestamp(KST)"]
+
+        ss.hidden_cols_user = [c for c in ss.hidden_cols_user if c in all_cols]
+        ss.pending_hidden_cols_user = ss.hidden_cols_user.copy()
+
+        visible_cols = [c for c in all_cols if c not in effective_hidden(all_cols, ss.pending_hidden_cols_user, ss.hide_defaults, FIXED_PIN)]
+        ss.pin_slots = sanitize_pin_slots(ss.pin_slots, visible_cols, PIN_COUNT, FIXED_PIN)
+        ss.pending_pin_slots = ss.pin_slots.copy()
+
+        eff_hidden_applied = effective_hidden(all_cols, ss.hidden_cols_user, ss.hide_defaults, FIXED_PIN)
+        ss.df_view = apply_view_filters(ss.df_base.copy(), hidden_cols=eff_hidden_applied)
+
+        if "Call ID" in ss.df_base.columns:
+            ss.unique_call_ids = sorted(ss.df_base["Call ID"].dropna().unique().tolist())
 
     if ss.df_rtp_summary.empty:
         st.info("분석 결과 RTP Timeout 통화가 없습니다.")
