@@ -190,8 +190,11 @@ def handle_rtp_analysis(client: DatadogAPIClient, params: dict):
     with st.spinner(f"2/2: {len(call_ids)}개 통화의 전체 이벤트 병렬 검색 중..."):
         batches = [call_id_list[i:i+batch_size] for i in range(0, len(call_id_list), batch_size)]
         
-        with ThreadPoolExecutor() as executor:
-            # 각 배치에 대한 API 호출 작업을 생성합니다.
+        # Use a managed ThreadPoolExecutor to prevent conflicts with pyarrow's internal pool
+        # during interpreter shutdown phases.
+        executor = ThreadPoolExecutor()
+        try:
+            # Create API call tasks for each batch.
             future_to_batch = {
                 executor.submit(
                     search_rum_events,
@@ -200,12 +203,20 @@ def handle_rtp_analysis(client: DatadogAPIClient, params: dict):
                     **api_params
                 ): batch for batch in batches
             }
-
-            # 완료되는 작업 순서대로 결과를 취합합니다.
+            # Collect results as they complete.
+            failed_batches = 0
             for future in as_completed(future_to_batch):
-                all_raw_events.extend(future.result())
+                try:
+                    all_raw_events.extend(future.result())
+                except Exception as e:
+                    failed_batches += 1
+                    st.error(f"이벤트 검색 중 오류 발생: {e}")
+            if failed_batches > 0:
+                st.warning(f"{failed_batches}개 배치 검색에 실패했습니다. 결과가 일부 누락될 수 있습니다.")
+        finally:
+            executor.shutdown(wait=True) # Ensure the executor is shut down before proceeding.
 
-    raw_events = all_raw_events
+    raw_events = all_raw_events # 이미 extend로 추가되었으므로 이 줄은 사실상 all_raw_events를 가리킴
     st.toast(f"2/2: 총 {len(raw_events)}개의 관련 이벤트를 가져왔습니다.")
 
     if not raw_events:
