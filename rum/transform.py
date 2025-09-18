@@ -95,6 +95,7 @@ def summarize_calls(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
         send_packets = []
         receive_health_check = []
         request_status, accept_status, reject_status, end_status = None, None, None, None
+        media_svr_ip, media_svr_port = None, None
         active_ts, stopping_ts = None, None
 
         overall_end_time_str = events[0].get("timestamp(KST)")
@@ -126,6 +127,11 @@ def summarize_calls(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
                     if parts:
                         termination_reason = " ".join(parts)
 
+            elif path == "/res/ENGINE_startCall":
+                if media_svr_ip is None:
+                    media_svr_ip = event.get("attributes.context.mediaSvrIP")
+                if media_svr_port is None:
+                    media_svr_port = event.get("attributes.context.mediaSvrPort")
             elif path == "/res/requestVoiceCall" and request_status is None:
                 request_status = status_code
             elif path == "/res/acceptCall" and accept_status is None:
@@ -170,6 +176,8 @@ def summarize_calls(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
             "endCall_status_code": end_status,
             "SendPackets 수": send_packets,
             "ReceiveHealthCheck 수": receive_health_check,
+            "MediaSvr IP": media_svr_ip,
+            "MediaSvr Port": media_svr_port,
         })
 
     summary_df = pd.DataFrame(summaries)
@@ -255,6 +263,7 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
         rtp_timeout_reason = "N/A"
         send_packets = []
         receive_health_check = []
+        media_svr_ip, media_svr_port = None, None
         
         usr_id = "N/A"
         first_version = "N/A"
@@ -288,6 +297,11 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
             elif path == "/res/SDK_CALL_STATUS_STOPPING" and stopping_ts is None:
                 stopping_ts = timestamp_str
 
+            if path == "/res/ENGINE_startCall":
+                if media_svr_ip is None:
+                    media_svr_ip = event.get("attributes.context.mediaSvrIP")
+                if media_svr_port is None:
+                    media_svr_port = event.get("attributes.context.mediaSvrPort")
             if event.get("attributes.context.method") == "BYE":
                 # This is a guess based on user's request.
                 # We assume the source information is in the url_path.
@@ -332,6 +346,8 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
             "Start Time (KST)": overall_start_time_str,
             "End Time (KST)": overall_end_time_str,
             "통화 시간": duration_str,
+            "MediaSvr IP": media_svr_ip,
+            "MediaSvr Port": media_svr_port,
             "BYE Reason": rtp_timeout_reason,
             "BYE 전달": bye_method_source,
             "SendPackets 수": send_packets,
