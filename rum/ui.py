@@ -107,6 +107,9 @@ def render_sidebar(ss, pin_count, fixed_pin):
         if ss.analysis_type == "User ID 분석":
             st.markdown("### 검색 조건")
             usr_id = st.text_input("usr.id", value="", placeholder="예: user_1234 (비우면 전체 *)")
+        elif ss.analysis_type == "RTP Timeout 분석":
+            st.markdown("### 검색 조건")
+            usr_id = st.text_input("usr.id (쉼표로 구분)", value="", placeholder="예: id1,id2 (비우면 전체)")
 
         kst = pytz.timezone("Asia/Seoul")
         st.markdown("##### 검색 기간 (KST)")
