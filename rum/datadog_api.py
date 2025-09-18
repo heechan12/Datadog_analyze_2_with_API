@@ -1,7 +1,6 @@
 import json
 import requests
 from typing import List, Dict, Any
-import streamlit as st
 
 from .api_client import DatadogAPIClient
 
@@ -44,14 +43,7 @@ def search_rum_events(
         if cursor:
             body["page"]["cursor"] = cursor
 
-        try:
-            data = client.post("/api/v2/rum/events/search", body)
-        except requests.exceptions.RequestException as e:
-            st.error(f"API 요청 실패: {e}")
-            if e.response:
-                st.code(e.response.text, language="json")
-            return []
-
+        data = client.post("/api/v2/rum/events/search", body)
         # data = resp.json()
         events = data.get("data", [])
         all_events.extend(events)
