@@ -150,12 +150,19 @@ def handle_rtp_analysis(client: DatadogAPIClient, params: dict):
     ss = st.session_state
     ss.df_summary = None # 통화 요약은 사용하지 않으므로 초기화
     api_params = params.copy()
+    usr_id_value = api_params.pop("usr_id_value", None)
     api_params.pop("analysis_type", None)
-    api_params.pop("usr_id_value", None)
     api_params.pop("custom_query", None) # custom_query 파라미터 제거
 
     # 1단계: RTP Timeout이 발생한 Call ID 수집
     rtp_reason_query = "@context.reason:(*RTP* OR *rtp*)"
+
+    if usr_id_value:
+        user_ids = [uid.strip() for uid in usr_id_value.split(',') if uid.strip()]
+        if user_ids:
+            user_id_query_part = " OR ".join(f'@usr.id:"{uid}"' for uid in user_ids)
+            rtp_reason_query = f'({rtp_reason_query}) AND ({user_id_query_part})'
+
     with st.spinner(f"1/2: RTP Timeout 이벤트 검색 중... (query: {rtp_reason_query})"):
         rtp_timeout_events = search_rum_events(client=client, query=rtp_reason_query, **api_params)
     
