@@ -35,6 +35,8 @@ def search_rum_events(
         "page": {"limit": limit_per_page},
         "sort": "-timestamp",
     }
+
+    print(body)
     
     all_events: List[Dict[str, Any]] = []
     cursor = None
