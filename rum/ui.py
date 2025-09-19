@@ -104,12 +104,16 @@ def render_sidebar(ss, pin_count, fixed_pin):
         st.divider()
 
         usr_id = ""
+        version_value = ""
+        build_version_value = ""
         if ss.analysis_type == "User ID 분석":
             st.markdown("### 검색 조건")
             usr_id = st.text_input("usr.id", value="", placeholder="예: user_1234 (비우면 전체 *)")
         elif ss.analysis_type == "RTP Timeout 분석":
             st.markdown("### 검색 조건")
             usr_id = st.text_input("usr.id (쉼표로 구분)", value="", placeholder="예: id1,id2 (비우면 전체)")
+            version_value = st.text_input("version (쉼표로 구분)", value="", placeholder="예: 1.0.0,1.0.1 (비우면 전체)")
+            build_version_value = st.text_input("build_version (쉼표로 구분)", value="", placeholder="예: 100,101 (비우면 전체)")
 
         kst = pytz.timezone("Asia/Seoul")
         st.markdown("##### 검색 기간 (KST)")
@@ -147,6 +151,8 @@ def render_sidebar(ss, pin_count, fixed_pin):
 
     search_params = {
         "usr_id_value": usr_id,
+        "version_value": version_value,
+        "build_version_value": build_version_value,
         "custom_query": ss.custom_query,
         "from_ts": ss.start_dt.astimezone(pytz.utc).isoformat(),
         "to_ts": ss.end_dt.astimezone(pytz.utc).isoformat(),

@@ -149,22 +149,39 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
     """RTP Timeout 통화에 대한 2단계 분석을 수행합니다."""
     ss = st.session_state
     ss.df_summary = None # 통화 요약은 사용하지 않으므로 초기화
+
     api_params = params.copy()
     usr_id_value = api_params.pop("usr_id_value", None)
+    version_value = api_params.pop("version_value", None)
+    build_version_value = api_params.pop("build_version_value", None)
     api_params.pop("analysis_type", None)
     api_params.pop("custom_query", None) # custom_query 파라미터 제거
 
     # 1단계: RTP Timeout이 발생한 Call ID 수집
-    rtp_reason_query = "@context.reason:(*RTP* OR *rtp*)" # RTP Timeout 분석 기본 Query 문
+    query_parts = ["@context.reason:(*RTP* OR *rtp*)"]
+
+    def build_or_query_part(field, value_str):
+        values = [v.strip() for v in value_str.split(',') if v.strip()]
+        if not values:
+            return None
+        # Python 3.12+ f-string 제약으로 인해 SyntaxError를 피하기 위해 문자열을 직접 조합합니다.
+        # f-string의 {} 표현식 안에는 '\'를 사용할 수 없습니다.
+        # 예: @usr.id:"user\"1"
+        escaped_values = [v.replace('"', '\\"') for v in values]
+        query_parts = [f'{field}:"{val}"' for val in escaped_values]
+        return f'({" OR ".join(query_parts)})'
 
     if usr_id_value:
-        user_ids = [uid.strip() for uid in usr_id_value.split(',') if uid.strip()]
-        if user_ids:
-            user_id_query_part = " OR ".join(f'@usr.id:"{uid}"' for uid in user_ids) # 입력된 User ID 는 OR 처리
-            rtp_reason_query = f'({rtp_reason_query}) AND ({user_id_query_part})'
+        query_parts.append(build_or_query_part("@usr.id", usr_id_value))
+    if version_value:
+        query_parts.append(build_or_query_part("version", version_value))
+    if build_version_value:
+        query_parts.append(build_or_query_part("@build_version", build_version_value))
 
-    with st.spinner(f"1/2: RTP Timeout 이벤트 검색 중... (query: {rtp_reason_query})"):
-        rtp_timeout_events = search_rum_events(client=client, query=rtp_reason_query, **api_params) # 이벤트 검색
+    final_query = " AND ".join(p for p in query_parts if p)
+
+    with st.spinner(f"1/2: RTP Timeout 이벤트 검색 중... (query: {final_query})"):
+        rtp_timeout_events = search_rum_events(client=client, query=final_query, **api_params) # 이벤트 검색
     
     if not rtp_timeout_events:
         st.info("해당 기간에 RTP Timeout으로 기록된 통화가 없습니다.")
