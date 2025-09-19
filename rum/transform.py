@@ -301,21 +301,28 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
             if isinstance(reason, str) and "rtp" in reason.lower() and rtp_timeout_reason == "N/A":
                 rtp_timeout_reason = reason
 
+            # 통화 시간을 계산하는 로직
+            # CALL_STATUS_ACTIVE - CALL_STATUS_STOPPING
             if path == "/res/SDK_CALL_STATUS_ACTIVE" and active_ts is None:
                 active_ts = timestamp_str
             elif path == "/res/SDK_CALL_STATUS_STOPPING" and stopping_ts is None:
                 stopping_ts = timestamp_str
 
+            # Media Server(미디어 서버) IP, Port 추출
             if path == "/res/ENGINE_startCall":
                 if media_svr_ip is None:
                     media_svr_ip = event.get("attributes.context.mediaSvrIP")
                 if media_svr_port is None:
                     media_svr_port = event.get("attributes.context.mediaSvrPort")
+
+            # 단말의 IP, Port 추출
             if path == "/res/ENGINE_getLocalAddrInfo":
                 if local_addr is None:
                     local_addr = event.get("attributes.context.local_addr")
                 if local_port is None:
                     local_port = event.get("attributes.context.local_port")
+
+            # BYE message 송수신 분석
             if event.get("attributes.context.method") == "BYE":
                 # This is a guess based on user's request.
                 # We assume the source information is in the url_path.

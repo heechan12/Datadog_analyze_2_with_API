@@ -28,17 +28,17 @@ def initialize_session_state():
     ss = st.session_state
     # 기본값 설정
     defaults = {
-        "df_base": None,  # 원본 데이터프레임
-        "df_view": None,  # 필터링 및 정렬된 뷰 데이터프레임
-        "df_summary": None,  # 통화 요약 데이터프레임
-        "df_rtp_summary": None, # RTP Timeout 분석 결과 데이터프레임
+        "df_base": None,                                # 원본 데이터프레임
+        "df_view": None,                                # 필터링 및 정렬된 뷰 데이터프레임
+        "df_summary": None,                             # 통화 요약 데이터프레임
+        "df_rtp_summary": None,                         # RTP Timeout 분석 결과 데이터프레임
         "hide_defaults": get_default_hidden_columns(),  # 기본적으로 숨길 열 목록
-        "hidden_cols_user": [],  # 사용자가 선택한 숨길 열 목록
-        "table_height": 900,  # 테이블 높이
-        "pin_slots": [""] * PIN_COUNT,  # 고정 열 슬롯
-        "unique_call_ids": [], # 고유 통화 ID 목록
-        "custom_query": "", # Custom Query 저장
-        "analysis_type": "User ID 분석", # 현재 분석 유형
+        "hidden_cols_user": [],                         # 사용자가 선택한 숨길 열 목록
+        "table_height": 900,                            # 테이블 높이
+        "pin_slots": [""] * PIN_COUNT,                  # 고정 열 슬롯
+        "unique_call_ids": [],                          # 고유 통화 ID 목록
+        "custom_query": "",                             # Custom Query 저장
+        "analysis_type": "User ID 분석",                 # 현재 분석 유형
     }
     for key, value in defaults.items():
         if key not in ss:
@@ -57,8 +57,8 @@ def initialize_session_state():
     if "end_dt" not in ss:
         ss.end_dt = datetime.now(kst)
 
-def handle_search_and_process_data(client: DatadogAPIClient, params: dict):
-    """API 검색을 실행하고 결과를 처리하여 세션 상태에 저장합니다."""
+def handle_user_id_based_rum_search(client: DatadogAPIClient, params: dict):
+    """User ID 기반 RUM 데이터 검색"""
     ss = st.session_state
     ss.df_rtp_summary = None # 다른 분석 결과 초기화
 
@@ -70,7 +70,7 @@ def handle_search_and_process_data(client: DatadogAPIClient, params: dict):
         query = "*"
     else:
         safe_usr_id = usr_id_value.replace('"', '\"')
-        query = f'@usr.id:"{safe_usr_id}"'
+        query = f'@usr.id:"{safe_usr_id}"'  # usr.id 쿼리 수행
 
     with st.spinner("검색 중..."):
         raw_events = search_rum_events(client=client, query=query, **params)
@@ -106,7 +106,7 @@ def handle_search_and_process_data(client: DatadogAPIClient, params: dict):
     else:
         ss.unique_call_ids = []
 
-def handle_custom_query_search(client: DatadogAPIClient, params: dict):
+def handle_custom_query_rum_search(client: DatadogAPIClient, params: dict):
     """Custom query 검색을 실행하고 결과를 처리하여 세션 상태에 저장합니다."""
     ss = st.session_state
     ss.df_summary = None
@@ -145,7 +145,7 @@ def handle_custom_query_search(client: DatadogAPIClient, params: dict):
     eff_hidden_applied = effective_hidden(all_cols, ss.hidden_cols_user, ss.hide_defaults, FIXED_PIN)
     ss.df_view = apply_view_filters(ss.df_base.copy(), hidden_cols=eff_hidden_applied)
 
-def handle_rtp_analysis(client: DatadogAPIClient, params: dict):
+def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
     """RTP Timeout 통화에 대한 2단계 분석을 수행합니다."""
     ss = st.session_state
     ss.df_summary = None # 통화 요약은 사용하지 않으므로 초기화
@@ -155,16 +155,16 @@ def handle_rtp_analysis(client: DatadogAPIClient, params: dict):
     api_params.pop("custom_query", None) # custom_query 파라미터 제거
 
     # 1단계: RTP Timeout이 발생한 Call ID 수집
-    rtp_reason_query = "@context.reason:(*RTP* OR *rtp*)"
+    rtp_reason_query = "@context.reason:(*RTP* OR *rtp*)" # RTP Timeout 분석 기본 Query 문
 
     if usr_id_value:
         user_ids = [uid.strip() for uid in usr_id_value.split(',') if uid.strip()]
         if user_ids:
-            user_id_query_part = " OR ".join(f'@usr.id:"{uid}"' for uid in user_ids)
+            user_id_query_part = " OR ".join(f'@usr.id:"{uid}"' for uid in user_ids) # 입력된 User ID 는 OR 처리
             rtp_reason_query = f'({rtp_reason_query}) AND ({user_id_query_part})'
 
     with st.spinner(f"1/2: RTP Timeout 이벤트 검색 중... (query: {rtp_reason_query})"):
-        rtp_timeout_events = search_rum_events(client=client, query=rtp_reason_query, **api_params)
+        rtp_timeout_events = search_rum_events(client=client, query=rtp_reason_query, **api_params) # 이벤트 검색
     
     if not rtp_timeout_events:
         st.info("해당 기간에 RTP Timeout으로 기록된 통화가 없습니다.")
@@ -277,16 +277,16 @@ def main():
     initialize_session_state()
     
     ss = st.session_state
-    run_search, run_rtp_analysis, run_custom_query, search_params = render_sidebar(ss, PIN_COUNT, FIXED_PIN)
+    run_user_id_search, run_rtp_analysis, run_custom_query, search_params = render_sidebar(ss, PIN_COUNT, FIXED_PIN)
 
-    if run_search:
-        handle_search_and_process_data(client, search_params)
+    if run_user_id_search:
+        handle_user_id_based_rum_search(client, search_params)
     
     if run_rtp_analysis:
-        handle_rtp_analysis(client, search_params)
+        handle_rum_based_rtp_analysis(client, search_params)
 
     if run_custom_query:
-        handle_custom_query_search(client, search_params)
+        handle_custom_query_rum_search(client, search_params)
     
     render_main_view(ss, FIXED_PIN)
 
