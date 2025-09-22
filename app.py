@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime, timedelta
 import pytz
 import pandas as pd
-import pprint
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # RUM modules
+from rum.api_client import DatadogAPIClient
 from rum.config import get_settings, get_default_hidden_columns
 from rum.datadog_api import search_rum_events
 from rum.transform import process_rum_events, to_base_dataframe, apply_view_filters, summarize_calls, analyze_rtp_timeouts
