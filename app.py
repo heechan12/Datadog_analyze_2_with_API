@@ -13,6 +13,7 @@ from rum.ui import render_sidebar, render_main_view, effective_hidden, sanitize_
 
 # TODO 1. Log 분석해서 RUM 데이터와 결합하여 분석하기 -> callId 기반으로 검색해서 데이터를 얻을 수 있을지 검토 필요
 # TODO 2. 대시보드 데이터 보여주기
+# TODO 3. Fast API + cron -> 시간 별로 RTP timeout 분석 자동화
 
 # ─────────────────────────────────────────
 # Constants & Settings
@@ -57,6 +58,10 @@ def initialize_session_state():
     if "end_dt" not in ss:
         ss.end_dt = datetime.now(kst)
 
+
+# ─────────────────────────────────────────
+# User ID 기반 RUM 데이터 검색
+# ─────────────────────────────────────────
 def handle_user_id_based_rum_search(client: DatadogAPIClient, params: dict):
     """User ID 기반 RUM 데이터 검색"""
     ss = st.session_state
@@ -106,8 +111,12 @@ def handle_user_id_based_rum_search(client: DatadogAPIClient, params: dict):
     else:
         ss.unique_call_ids = []
 
+
+# ─────────────────────────────────────────
+# Custom Query 페이지
+# ─────────────────────────────────────────
 def handle_custom_query_rum_search(client: DatadogAPIClient, params: dict):
-    """Custom query 검색을 실행하고 결과를 처리하여 세션 상태에 저장합니다."""
+    """Custom query 검색을 실행하고 결과를 처리하여 세션 상태에 저장"""
     ss = st.session_state
     ss.df_summary = None
     ss.df_rtp_summary = None
@@ -145,8 +154,12 @@ def handle_custom_query_rum_search(client: DatadogAPIClient, params: dict):
     eff_hidden_applied = effective_hidden(all_cols, ss.hidden_cols_user, ss.hide_defaults, FIXED_PIN)
     ss.df_view = apply_view_filters(ss.df_base.copy(), hidden_cols=eff_hidden_applied)
 
+
+# ─────────────────────────────────────────
+# RTP Timeout 검색 및 2차 분석
+# ─────────────────────────────────────────
 def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
-    """RTP Timeout 통화에 대한 2단계 분석을 수행합니다."""
+    """RTP Timeout 통화에 대한 2단계 분석을 수행"""
     ss = st.session_state
     ss.df_summary = None # 통화 요약은 사용하지 않으므로 초기화
 
@@ -168,7 +181,7 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
         # f-string의 {} 표현식 안에는 '\'를 사용할 수 없습니다.
         # 예: @usr.id:"user\"1"
         escaped_values = [v.replace('"', '\\"') for v in values]
-        query_parts = [f'{field}:"{val}"' for val in escaped_values]
+        query_parts = [f'{field}:{val}' for val in escaped_values]
         return f'({" OR ".join(query_parts)})'
 
     if usr_id_value:
