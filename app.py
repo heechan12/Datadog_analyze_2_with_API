@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # RUM modules
 from rum.config import get_settings, get_default_hidden_columns
-from rum.datadog_api import search_rum_events, DatadogAPIClient
-from rum.transform import build_rows_dynamic, to_base_dataframe, apply_view_filters, summarize_calls, analyze_rtp_timeouts
+from rum.datadog_api import search_rum_events
+from rum.transform import process_rum_events, to_base_dataframe, apply_view_filters, summarize_calls, analyze_rtp_timeouts
 from rum.ui import render_sidebar, render_main_view, effective_hidden, sanitize_pin_slots
 
 # TODO 1. Log 분석해서 RUM 데이터와 결합하여 분석하기 -> callId 기반으로 검색해서 데이터를 얻을 수 있을지 검토 필요
@@ -88,7 +88,7 @@ def handle_user_id_based_rum_search(client: DatadogAPIClient, params: dict):
         return
 
     with st.spinner("이벤트 데이터 변환 중..."):
-        flat_rows = build_rows_dynamic(raw_events, tz_name="Asia/Seoul")
+        flat_rows = process_rum_events(raw_events, tz_name="Asia/Seoul")
     
     with st.spinner("통화 정보 요약 중..."):
         ss.df_summary = summarize_calls(flat_rows)
@@ -139,7 +139,7 @@ def handle_custom_query_rum_search(client: DatadogAPIClient, params: dict):
         return
 
     with st.spinner("이벤트 데이터 변환 중..."):
-        flat_rows = build_rows_dynamic(raw_events, tz_name="Asia/Seoul")
+        flat_rows = process_rum_events(raw_events, tz_name="Asia/Seoul")
 
     ss.df_base = to_base_dataframe(flat_rows)
     all_cols = [c for c in ss.df_base.columns if c != "timestamp(KST)"]
@@ -202,8 +202,8 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
         ss.df_base = ss.df_view = None
         return
 
-    # build_rows_dynamic를 사용하여 Call ID를 통합
-    flat_rtp_rows = build_rows_dynamic(rtp_timeout_events, tz_name="Asia/Seoul")
+    # process_rum_events를 사용하여 Call ID를 통합
+    flat_rtp_rows = process_rum_events(rtp_timeout_events, tz_name="Asia/Seoul")
     
     call_ids = set()
     for row in flat_rtp_rows:
@@ -263,7 +263,7 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
         return
 
     with st.spinner("이벤트 데이터 변환 및 분석 중..."):
-        flat_rows = build_rows_dynamic(raw_events, tz_name="Asia/Seoul")
+        flat_rows = process_rum_events(raw_events, tz_name="Asia/Seoul")
         ss.df_rtp_summary = analyze_rtp_timeouts(flat_rows)
         
         # 원본 로그 데이터프레임도 생성

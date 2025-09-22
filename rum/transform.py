@@ -33,12 +33,12 @@ def flatten(prefix: str, obj: Any, out: Dict[str, Any]) -> None:
         out[prefix] = obj
 
 
-def build_rows_dynamic(all_events: List[Dict[str, Any]], tz_name="Asia/Seoul") -> List[Dict[str, Any]]:
+def process_rum_events(all_events: List[Dict[str, Any]], tz_name="Asia/Seoul") -> List[Dict[str, Any]]:
     """
     RUM 이벤트 목록을 평탄화된 행(딕셔너리)의 목록으로 변환합니다.
     - 중첩된 속성을 'a.b.c' 형태로 평탄화합니다.
     - 타임스탬프를 KST로 변환합니다.
-    - 여러 형태의 Call ID를 단일 필드로 통합합니다.
+    - 여러 형태의 Call ID를 단일 필드('Call ID')로 정규화합니다.
     """
     processed_rows: List[Dict[str, Any]] = []
     for event in all_events:
