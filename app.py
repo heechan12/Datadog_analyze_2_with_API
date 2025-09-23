@@ -70,6 +70,8 @@ def handle_user_id_based_rum_search(client: DatadogAPIClient, params: dict):
     usr_id_value = params.pop("usr_id_value", None)
     params.pop("analysis_type", None)
     params.pop("custom_query", None)  # custom_query는 이 분석에서 사용하지 않으므로 제거
+    params.pop("version_value", None)
+    params.pop("build_version_value", None)
 
     if not usr_id_value:
         query = "*"
@@ -124,6 +126,8 @@ def handle_custom_query_rum_search(client: DatadogAPIClient, params: dict):
     query = params.pop("custom_query", "*")
     params.pop("analysis_type", None)
     params.pop("usr_id_value", None)
+    params.pop("version_value", None)
+    params.pop("build_version_value", None)
 
     if not query.strip():
         query = "*"
