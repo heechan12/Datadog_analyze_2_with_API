@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # RUM modules
 from rum.config import get_settings, get_default_hidden_columns
 from rum.datadog_api import search_rum_events, DatadogAPIClient
-from rum.transform import build_rows_dynamic, to_base_dataframe, apply_view_filters, summarize_calls, analyze_rtp_timeouts
+from rum.transform import build_rows_dynamic, to_base_dataframe, apply_view_filters, summarize_calls, analyze_rtp_timeouts, analyze_push_reception
 from rum.ui import render_sidebar, render_main_view, effective_hidden, sanitize_pin_slots
 
 # TODO 1. Log 분석해서 RUM 데이터와 결합하여 분석하기 -> callId 기반으로 검색해서 데이터를 얻을 수 있을지 검토 필요
@@ -32,6 +32,7 @@ def initialize_session_state():
         "df_view": None,                                # 필터링 및 정렬된 뷰 데이터프레임
         "df_summary": None,                             # 통화 요약 데이터프레임
         "df_rtp_summary": None,                         # RTP Timeout 분석 결과 데이터프레임
+        "df_push_analysis": None,                       # Push 수신 분석 결과 데이터프레임
         "hide_defaults": get_default_hidden_columns(),  # 기본적으로 숨길 열 목록
         "hidden_cols_user": [],                         # 사용자가 선택한 숨길 열 목록
         "table_height": 900,                            # 테이블 높이
@@ -61,6 +62,7 @@ def handle_user_id_based_rum_search(client: DatadogAPIClient, params: dict):
     """User ID 기반 RUM 데이터 검색"""
     ss = st.session_state
     ss.df_rtp_summary = None # 다른 분석 결과 초기화
+    ss.df_push_analysis = None
 
     usr_id_value = params.pop("usr_id_value", None)
     params.pop("analysis_type", None)
@@ -111,6 +113,7 @@ def handle_custom_query_rum_search(client: DatadogAPIClient, params: dict):
     ss = st.session_state
     ss.df_summary = None
     ss.df_rtp_summary = None
+    ss.df_push_analysis = None
 
     query = params.pop("custom_query", "*")
     params.pop("analysis_type", None)
@@ -149,6 +152,7 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
     """RTP Timeout 통화에 대한 2단계 분석을 수행합니다."""
     ss = st.session_state
     ss.df_summary = None # 통화 요약은 사용하지 않으므로 초기화
+    ss.df_push_analysis = None
 
     api_params = params.copy()
     usr_id_value = api_params.pop("usr_id_value", None)
@@ -275,6 +279,58 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
     else:
         st.toast(f"RTP Timeout 통화 {len(ss.df_rtp_summary)}건을 분석했습니다.")
 
+def handle_push_reception_analysis(client: DatadogAPIClient, params: dict):
+    """Push 수신 로그를 검색하고 분석합니다."""
+    ss = st.session_state
+    # 다른 분석 결과 초기화
+    ss.df_summary = None
+    ss.df_rtp_summary = None
+    ss.df_push_analysis = None
+    ss.df_base = None
+    ss.df_view = None
+
+    # 이 분석에서는 다른 파라미터가 필요 없으므로 제거
+    params.pop("analysis_type", None)
+    params.pop("usr_id_value", None)
+    params.pop("custom_query", None)
+    params.pop("version_value", None)
+    params.pop("build_version_value", None)
+
+    query = '@resource.url_path:"/res/incomingflow/pushReceived"'
+
+    with st.spinner(f"검색 중... (query: {query})"):
+        raw_events = search_rum_events(client=client, query=query, **params)
+    st.success(f"가져온 이벤트: {len(raw_events)}건")
+
+    if not raw_events:
+        st.info("검색 결과가 없습니다.")
+        return
+
+    with st.spinner("이벤트 데이터 변환 및 분석 중..."):
+        flat_rows = build_rows_dynamic(raw_events, tz_name="Asia/Seoul")
+        
+        # Push 수신 분석 수행
+        ss.df_push_analysis = analyze_push_reception(flat_rows)
+        
+        # 원본 로그 데이터프레임도 생성
+        ss.df_base = to_base_dataframe(flat_rows)
+        all_cols = [c for c in ss.df_base.columns if c != "timestamp(KST)"]
+
+        ss.hidden_cols_user = [c for c in ss.hidden_cols_user if c in all_cols]
+        ss.pending_hidden_cols_user = ss.hidden_cols_user.copy()
+
+        visible_cols = [c for c in all_cols if c not in effective_hidden(all_cols, ss.pending_hidden_cols_user, ss.hide_defaults, FIXED_PIN)]
+        ss.pin_slots = sanitize_pin_slots(ss.pin_slots, visible_cols, PIN_COUNT, FIXED_PIN)
+        ss.pending_pin_slots = ss.pin_slots.copy()
+
+        eff_hidden_applied = effective_hidden(all_cols, ss.hidden_cols_user, ss.hide_defaults, FIXED_PIN)
+        ss.df_view = apply_view_filters(ss.df_base.copy(), hidden_cols=eff_hidden_applied)
+
+    if ss.df_push_analysis.empty:
+        st.info("분석 결과 Push 수신 이벤트가 없습니다.")
+    else:
+        st.toast(f"Push 수신 이벤트 {len(ss.df_push_analysis)}건을 분석했습니다.")
+
 # ─────────────────────────────────────────
 # Main App Logic
 # ─────────────────────────────────────────
@@ -294,7 +350,7 @@ def main():
     initialize_session_state()
     
     ss = st.session_state
-    run_user_id_search, run_rtp_analysis, run_custom_query, search_params = render_sidebar(ss, PIN_COUNT, FIXED_PIN)
+    run_user_id_search, run_rtp_analysis, run_custom_query, run_push_analysis, search_params = render_sidebar(ss, PIN_COUNT, FIXED_PIN)
 
     if run_user_id_search:
         handle_user_id_based_rum_search(client, search_params)
@@ -304,6 +360,9 @@ def main():
 
     if run_custom_query:
         handle_custom_query_rum_search(client, search_params)
+    
+    if run_push_analysis:
+        handle_push_reception_analysis(client, search_params)
     
     render_main_view(ss, FIXED_PIN)
 

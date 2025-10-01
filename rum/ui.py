@@ -3,6 +3,7 @@ from datetime import datetime
 import pytz
 import pandas as pd
 import re
+import altair as alt
 
 from .transform import apply_view_filters, analyze_rtp_timeouts, filter_dataframe
 
@@ -96,7 +97,7 @@ def render_sidebar(ss, pin_count, fixed_pin):
         st.markdown("### 분석 유형")
         ss.analysis_type = st.radio(
             "분석 유형 선택",
-            ["User ID 분석", "RTP Timeout 분석", "Custom Query 분석"],
+            ["User ID 분석", "RTP Timeout 분석", "Custom Query 분석", "Push 수신 분석"],
             label_visibility="collapsed",
             key="analysis_type_radio" # 위젯 키를 통해 상태 유지
         )
@@ -114,6 +115,9 @@ def render_sidebar(ss, pin_count, fixed_pin):
             usr_id = st.text_input("usr.id (쉼표로 구분)", value="", placeholder="예: id1,id2 (비우면 전체)")
             version_value = st.text_input("version (쉼표로 구분)", value="", placeholder="예: 1.0.0,1.0.1 (비우면 전체)")
             build_version_value = st.text_input("build_version (쉼표로 구분)", value="", placeholder="예: 100,101 (비우면 전체)")
+        elif ss.analysis_type == "Push 수신 분석":
+            st.markdown("### 검색 조건")
+            st.info("선택한 기간 내의 Push 수신 로그를 분석합니다.")
 
         kst = pytz.timezone("Asia/Seoul")
         st.markdown("##### 검색 기간 (KST)")
@@ -133,6 +137,7 @@ def render_sidebar(ss, pin_count, fixed_pin):
         run_search = False
         run_rtp_analysis = False
         run_custom_query = False
+        run_push_analysis = False
 
         if ss.analysis_type == "User ID 분석":
             run_search = st.button("조회", disabled=not is_valid_time)
@@ -140,6 +145,8 @@ def render_sidebar(ss, pin_count, fixed_pin):
             run_rtp_analysis = st.button("RTP Timeout 분석", disabled=not is_valid_time)
         elif ss.analysis_type == "Custom Query 분석":
             run_custom_query = st.button("조회", disabled=not is_valid_time)
+        elif ss.analysis_type == "Push 수신 분석":
+            run_push_analysis = st.button("Push 수신 분석", disabled=not is_valid_time)
 
         st.divider()
         st.markdown("### 표시 옵션")
@@ -160,7 +167,7 @@ def render_sidebar(ss, pin_count, fixed_pin):
         "max_pages": 20,
         "analysis_type": ss.analysis_type
     }
-    return run_search, run_rtp_analysis, run_custom_query, search_params
+    return run_search, run_rtp_analysis, run_custom_query, run_push_analysis, search_params
 
 def render_options_sidebar(ss, pin_count, fixed_pin):
     """사이드바에 표시 옵션(열 숨김, 핀 설정 등)을 렌더링합니다."""
@@ -209,6 +216,21 @@ def render_main_view(ss, fixed_pin):
         st.markdown("### 검색 조건")
         st.warning("공란으로 검색하지 말아주세요~")
         ss.custom_query = st.text_area("Datadog Query", value=ss.custom_query, placeholder="예: @context.callID:\"...\" AND (*ERROR* OR *FAIL*)", height=100, label_visibility="collapsed")
+
+    if ss.get('df_push_analysis') is not None and not ss.df_push_analysis.empty:
+        st.markdown("## Push 수신 분석 결과")
+
+        st.markdown("### Latency (ms) 분포")
+        chart = alt.Chart(ss.df_push_analysis).mark_bar().encode(
+            alt.X("latency(ms)", bin=alt.Bin(maxbins=50), title="Latency (ms)"),
+            alt.Y('count()', title="이벤트 수"),
+            tooltip=['latency(ms)', 'count()']
+        ).interactive()
+        st.altair_chart(chart, use_container_width=True)
+
+        st.markdown("### 분석 데이터")
+        st.dataframe(ss.df_push_analysis, use_container_width=True)
+        st.divider()
 
     if ss.get('df_rtp_summary') is not None and not ss.df_rtp_summary.empty:
         st.markdown("## RTP Timeout 분석 결과")
@@ -265,7 +287,7 @@ def render_main_view(ss, fixed_pin):
         with st.expander("원본 이벤트(JSON) 보기"):
             if st.checkbox("JSON 변환/표시"):
                 st.json(df_render.head(50).to_dict(orient="records"))
-    elif ss.get('df_rtp_summary') is None and ss.df_view is None:
+    elif ss.get('df_rtp_summary') is None and ss.df_view is None and ss.get('df_push_analysis') is None:
         if ss.analysis_type == "Custom Query 분석":
             st.caption("쿼리 입력 후 '조회'를 실행하세요.")
         else:

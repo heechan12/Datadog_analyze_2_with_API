@@ -1,7 +1,7 @@
 import pprint
 import re
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil import tz
 from typing import Dict, Any, List
 import pandas as pd
@@ -12,14 +12,47 @@ from collections import defaultdict
 # ─────────────────────────────────────────
 
 
-def iso_to_kst_ms(iso_str: str, tz_name: str = "Asia/Seoul") -> str:
-    """ISO 8601 형식의 시간 문자열을 KST 시간(ms 단위 포함)으로 변환합니다."""
-    if not iso_str:
+def iso_to_kst_ms(ts_val: Any, tz_name: str = "Asia/Seoul") -> str:
+    """ISO 8601 형식 또는 Unix 타임스탬프를 KST 시간(ms 단위 포함)으로 변환합니다."""
+    if not ts_val:
         return ""
-    dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+
+    dt = None
+    # 숫자(Unix 타임스탬프)인 경우
+    try:
+        # float으로 변환 시도
+        ts_float = float(ts_val)
+        # Unix 타임스탬프를 datetime 객체로 변환 (UTC 기준)
+        dt_utc = datetime.fromtimestamp(ts_float, tz=timezone.utc)
+        dt = dt_utc
+    except (ValueError, TypeError):
+        # 숫자가 아닌 경우, ISO 8601 형식으로 처리
+        if isinstance(ts_val, str):
+            try:
+                dt = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
+            except ValueError:
+                return "Invalid timestamp format"
+        else:
+            return "Invalid timestamp type"
+
+    if dt is None:
+        return ""
+
+    # KST로 변환
     kst = tz.gettz(tz_name)
     k = dt.astimezone(kst)
-    return k.strftime("%Y-%m-%d %H:%M:%S.") + f"{int(k.strftime('%f'))//1000:03d} KST"
+    return k.strftime("%Y-%m-%d %H:%M:%S.") + f"{int(k.microsecond // 1000):03d} KST"
+
+
+def to_datetime_kst(timestamp_str: str) -> datetime | None:
+    """KST 시간 문자열(ms 포함)을 datetime 객체로 변환합니다."""
+    if not isinstance(timestamp_str, str):
+        return None
+    try:
+        # " KST" 제거 후 파싱
+        return datetime.strptime(timestamp_str.replace(" KST", ""), "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError:
+        return None
 
 
 def flatten(prefix: str, obj: Any, out: Dict[str, Any]) -> None:
@@ -386,6 +419,39 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
         summary_df = summary_df.sort_values("Start Time (KST)", ascending=False).reset_index(drop=True)
 
     return summary_df
+
+
+def analyze_push_reception(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    """
+    Push 수신 로그를 분석하여 로그 타임스탬프와 context.timestamp 간의 지연 시간을 계산합니다.
+    """
+    push_events = []
+    for row in flat_rows:
+        # app.py에서 이미 '@resource.url_path:"/res/incomingflow/pushReceived"'로 필터링했으므로,
+        # 이 함수에 들어온 모든 row는 pushReceived 이벤트입니다. 중복 필터링을 제거합니다.
+        log_ts_str = row.get("timestamp(KST)")
+        context_ts_val = row.get("attributes.context.timestamp")
+
+        if log_ts_str and context_ts_val:
+            log_ts = to_datetime_kst(log_ts_str)
+            # context.timestamp는 Unix 또는 ISO 형식일 수 있으므로 iso_to_kst_ms 사용
+            context_ts_kst_str = iso_to_kst_ms(context_ts_val)
+            context_ts = to_datetime_kst(context_ts_kst_str)
+
+            if log_ts and context_ts:
+                latency_ms = (log_ts - context_ts).total_seconds() * 1000
+                push_events.append({
+                    "log_timestamp(KST)": log_ts_str,
+                    "context_timestamp(KST)": context_ts_kst_str,
+                    "latency(ms)": latency_ms,
+                })
+
+    if not push_events:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(push_events)
+    df = df.sort_values("log_timestamp(KST)", ascending=False).reset_index(drop=True)
+    return df
 
 
 def filter_dataframe(df: pd.DataFrame, column: str, filter_text: str, is_and: bool) -> pd.DataFrame:
