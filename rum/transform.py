@@ -273,6 +273,11 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
         receive_health_check = []
         media_svr_ip, media_svr_port = None, None
         local_addr, local_port = None, None
+
+        audio_session_active_500_count = 0
+        audio_session_deactive_count = 0
+        audio_session_interrupt_count = 0
+        audio_seesion_routed_count = 0
         
         usr_id = "N/A"
         first_version = "N/A"
@@ -297,6 +302,19 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
             path = event.get("attributes.resource.url_path")
             timestamp_str = event.get("timestamp(KST)")
             reason = event.get("attributes.context.reason", "")
+            status_code = event.get("attributes.resource.status_code")
+
+            if path == "/res/audioSessionActive" and status_code == 500 :
+                audio_session_active_500_count += 1
+
+            if path == "/res/audioSessionDeactive" :
+                audio_session_deactive_count += 1
+
+            if path == "/res/audioSessionInterrupt" :
+                audio_session_interrupt_count += 1
+
+            if path == "/res/routedAudioSession" :
+                audio_seesion_routed_count += 1
 
             if isinstance(reason, str) and "rtp" in reason.lower() and rtp_timeout_reason == "N/A":
                 rtp_timeout_reason = reason
@@ -376,6 +394,10 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
             "MediaSvr Port": media_svr_port,
             "Local Addr": local_addr,
             "Local Port": local_port,
+            "audioSessionActive(500)": audio_session_active_500_count,
+            "audioSessionDeactive": audio_session_deactive_count,
+            "audioSessionInterrupt": audio_session_interrupt_count,
+            "routedAudioSession" : audio_seesion_routed_count,
         })
 
     if not summaries:

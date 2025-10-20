@@ -36,7 +36,7 @@ def search_rum_events(
         "sort": "-timestamp",
     }
 
-    print(body)
+    # print(body)
     
     all_events: List[Dict[str, Any]] = []
     cursor = None
