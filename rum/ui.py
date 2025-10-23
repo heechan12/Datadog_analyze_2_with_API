@@ -213,6 +213,22 @@ def render_main_view(ss, fixed_pin):
     if ss.get('df_rtp_summary') is not None and not ss.df_rtp_summary.empty:
         st.markdown("## RTP Timeout 분석 결과")
         st.dataframe(ss.df_rtp_summary, use_container_width=True, height=800)
+
+        # RTP 분석 차트
+        if ss.get('df_rtp_categorized') is not None:
+            st.markdown("### RTP Timeout 통계")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown("##### 사용자 별 발생 건 수")
+                st.bar_chart(ss.df_rtp_categorized['by_user'].set_index('User ID'))
+            with col2:
+                st.markdown("##### 앱 버전 별 발생 건 수")
+                st.bar_chart(ss.df_rtp_categorized['by_version'].set_index('App Version'))
+            with col3:
+                st.markdown("##### 통화 시간 별 발생 건 수")
+                st.bar_chart(ss.df_rtp_categorized['by_duration'].set_index('Duration Category'))
+
+
         st.divider()
 
     if ss.df_view is not None:

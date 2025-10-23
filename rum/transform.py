@@ -277,7 +277,9 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
         audio_session_active_500_count = 0
         audio_session_deactive_count = 0
         audio_session_interrupt_count = 0
-        audio_seesion_routed_count = 0
+        audio_session_routed_count = 0
+
+        has_firstTx = ""
         
         usr_id = "N/A"
         first_version = "N/A"
@@ -314,7 +316,7 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
                 audio_session_interrupt_count += 1
 
             if path == "/res/routedAudioSession" :
-                audio_seesion_routed_count += 1
+                audio_session_routed_count += 1
 
             if isinstance(reason, str) and "rtp" in reason.lower() and rtp_timeout_reason == "N/A":
                 rtp_timeout_reason = reason
@@ -339,6 +341,10 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
                     local_addr = event.get("attributes.context.local_addr")
                 if local_port is None:
                     local_port = event.get("attributes.context.local_port")
+
+            # firstTx 추출
+            if path == "/res/ENGINE_firstTx":
+                has_firstTx = "있음"
 
             # BYE message 송수신 분석
             if event.get("attributes.context.method") == "BYE":
@@ -371,7 +377,7 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
                 stop_dt = datetime.strptime(stopping_ts.replace(" KST", ""), "%Y-%m-%d %H:%M:%S.%f")
                 active_dt = datetime.strptime(active_ts.replace(" KST", ""), "%Y-%m-%d %H:%M:%S.%f")
                 duration_seconds = (stop_dt - active_dt).total_seconds()
-                duration_str = f"{duration_seconds:.1f} 초"
+                duration_str = f"{duration_seconds:.1f}"
             except (ValueError, TypeError):
                 duration_str = "시간 포맷 오류"
         elif not active_ts:
@@ -384,9 +390,10 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
             "App Version": first_version,
             "Start Time (KST)": overall_start_time_str,
             "End Time (KST)": overall_end_time_str,
-            "통화 시간": duration_str,
+            "통화 시간(초)": duration_str,
             "BYE Reason": rtp_timeout_reason,
             "BYE 전달": bye_method_source,
+            "firstTx 유무" : has_firstTx,
             "SendPackets 수": send_packets,
             "ReceiveHealthCheck 수": receive_health_check,
             "usr.id": usr_id,
@@ -394,10 +401,10 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
             "MediaSvr Port": media_svr_port,
             "Local Addr": local_addr,
             "Local Port": local_port,
-            "audioSessionActive(500)": audio_session_active_500_count,
-            "audioSessionDeactive": audio_session_deactive_count,
-            "audioSessionInterrupt": audio_session_interrupt_count,
-            "routedAudioSession" : audio_seesion_routed_count,
+            # "audioSessionActive(500)": audio_session_active_500_count,
+            # "audioSessionDeactive": audio_session_deactive_count,
+            # "audioSessionInterrupt": audio_session_interrupt_count,
+            # "routedAudioSession" : audio_seesion_routed_count,
         })
 
     if not summaries:
@@ -408,6 +415,59 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
         summary_df = summary_df.sort_values("Start Time (KST)", ascending=False).reset_index(drop=True)
 
     return summary_df
+
+
+def categorize_rtp_timeouts(summary_df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    """
+    RTP Timeout 요약 데이터프레임을 분석하여 차트용 데이터를 생성합니다.
+    - 사용자별 발생 건수
+    - 앱 버전별 발생 건수
+    - 통화 시간대별 발생 건수
+    """
+    if summary_df.empty:
+        return {
+            "by_user": pd.DataFrame(),
+            "by_version": pd.DataFrame(),
+            "by_duration": pd.DataFrame(),
+        }
+
+    # 1. 유저 분석
+    if "usr.id" in summary_df.columns:
+        user_counts = summary_df["usr.id"].value_counts().head(10).reset_index()
+        user_counts.columns = ["User ID", "Count"]
+    else:
+        user_counts = pd.DataFrame(columns=["User ID", "Count"])
+
+    # 2. App Version 분석
+    if "App Version" in summary_df.columns:
+        version_counts = summary_df["App Version"].value_counts().reset_index()
+        version_counts.columns = ["App Version", "Count"]
+    else:
+        version_counts = pd.DataFrame(columns=["App Version", "Count"])
+
+    # 3. 통화 시간 분석
+    duration_categories = []
+    if "통화 시간(초)" in summary_df.columns:
+        for duration in summary_df["통화 시간(초)"]:
+            try:
+                duration_sec = float(duration)
+                if 0 <= duration_sec <= 11:
+                    duration_categories.append("0-11초")
+                elif 12 <= duration_sec <= 16:
+                    duration_categories.append("12-16초")
+                else:
+                    duration_categories.append("17초 이상")
+            except (ValueError, TypeError):
+                duration_categories.append("알 수 없음")
+
+    duration_counts = pd.Series(duration_categories).value_counts().reindex(["0-11초", "12-16초", "17초 이상", "알 수 없음"], fill_value=0).reset_index()
+    duration_counts.columns = ["Duration Category", "Count"]
+
+    return {
+        "by_user": user_counts,
+        "by_version": version_counts,
+        "by_duration": duration_counts,
+    }
 
 
 def filter_dataframe(df: pd.DataFrame, column: str, filter_text: str, is_and: bool) -> pd.DataFrame:

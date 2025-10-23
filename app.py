@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from rum.api_client import DatadogAPIClient
 from rum.config import get_settings, get_default_hidden_columns
 from rum.datadog_api import search_rum_events
-from rum.transform import process_rum_events, to_base_dataframe, apply_view_filters, summarize_calls, analyze_rtp_timeouts
+from rum.transform import process_rum_events, to_base_dataframe, apply_view_filters, summarize_calls, analyze_rtp_timeouts, categorize_rtp_timeouts
 from rum.ui import render_sidebar, render_main_view, effective_hidden, sanitize_pin_slots
 
 # TODO 1. Log 분석해서 RUM 데이터와 결합하여 분석하기 -> callId 기반으로 검색해서 데이터를 얻을 수 있을지 검토 필요
@@ -33,6 +33,7 @@ def initialize_session_state():
         "df_view": None,                                # 필터링 및 정렬된 뷰 데이터프레임
         "df_summary": None,                             # 통화 요약 데이터프레임
         "df_rtp_summary": None,                         # RTP Timeout 분석 결과 데이터프레임
+        "df_rtp_categorized": None,                     # RTP Timeout 분석 차트용 데이터
         "hide_defaults": get_default_hidden_columns(),  # 기본적으로 숨길 열 목록
         "hidden_cols_user": [],                         # 사용자가 선택한 숨길 열 목록
         "table_height": 900,                            # 테이블 높이
@@ -166,6 +167,7 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
     """RTP Timeout 통화에 대한 2단계 분석을 수행"""
     ss = st.session_state
     ss.df_summary = None # 통화 요약은 사용하지 않으므로 초기화
+    ss.df_rtp_categorized = None # 차트 데이터 초기화
 
     api_params = params.copy()
     usr_id_value = api_params.pop("usr_id_value", None)
@@ -203,6 +205,7 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
     if not rtp_timeout_events:
         st.info("해당 기간에 RTP Timeout으로 기록된 통화가 없습니다.")
         ss.df_rtp_summary = pd.DataFrame()
+        ss.df_rtp_categorized = None
         ss.df_base = ss.df_view = None
         return
 
@@ -220,6 +223,7 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
     if not call_ids:
         st.info("RTP Timeout 이벤트에서 Call ID를 찾을 수 없었습니다.")
         ss.df_rtp_summary = pd.DataFrame()
+        ss.df_rtp_categorized = None
         ss.df_base = ss.df_view = None
         return
 
@@ -263,6 +267,7 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
     if not raw_events:
         st.warning("RTP Timeout 통화 ID로 이벤트를 조회했으나, 결과를 가져오지 못했습니다.")
         ss.df_rtp_summary = pd.DataFrame()
+        ss.df_rtp_categorized = None
         ss.df_base = ss.df_view = None
         return
 
@@ -270,6 +275,7 @@ def handle_rum_based_rtp_analysis(client: DatadogAPIClient, params: dict):
         flat_rows = process_rum_events(raw_events, tz_name="Asia/Seoul")
         ss.df_rtp_summary = analyze_rtp_timeouts(flat_rows)
         
+        ss.df_rtp_categorized = categorize_rtp_timeouts(ss.df_rtp_summary)
         # 원본 로그 데이터프레임도 생성
         ss.df_base = to_base_dataframe(flat_rows)
         all_cols = [c for c in ss.df_base.columns if c != "timestamp(KST)"]
