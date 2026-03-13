@@ -14,6 +14,7 @@ from collections import defaultdict
 
 def iso_to_kst_ms(iso_str: str, tz_name: str = "Asia/Seoul") -> str:
     """ISO 8601 형식의 시간 문자열을 KST 시간(ms 단위 포함)으로 변환합니다."""
+    print("DEBUG | iso_to_kst_ms called")
     if not iso_str:
         return ""
     dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
@@ -40,7 +41,12 @@ def process_rum_events(all_events: List[Dict[str, Any]], tz_name="Asia/Seoul") -
     - 타임스탬프를 KST로 변환합니다.
     - 여러 형태의 Call ID를 단일 필드('Call ID')로 정규화합니다.
     """
+    print("DEBUG | process_rum_events called")
     processed_rows: List[Dict[str, Any]] = []
+    
+    # Pre-load timezone to avoid repeated lookups
+    kst_tz = tz.gettz(tz_name)
+
     for event in all_events:
         attrs = event.get("attributes", {}) or {}
         flat_row: Dict[str, Any] = {}
@@ -56,8 +62,19 @@ def process_rum_events(all_events: List[Dict[str, Any]], tz_name="Asia/Seoul") -
         if tags:
             flat_row["tags"] = tags
 
-        flat_row["timestamp(KST)"] = iso_to_kst_ms(attrs.get("timestamp"), tz_name)
-
+        # Optimized timestamp conversion
+        ts_str = attrs.get("timestamp")
+        if ts_str:
+            try:
+                # Assuming ISO format. 'Z' replacement is faster than dateutil parser
+                dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                k = dt.astimezone(kst_tz)
+                # Manual formatting is faster than strftime for simple fixed format
+                # But strftime is safer. Stick to strftime but with pre-loaded tz.
+                flat_row["timestamp(KST)"] = k.strftime("%Y-%m-%d %H:%M:%S.") + f"{k.microsecond//1000:03d} KST"
+            except ValueError:
+                flat_row["timestamp(KST)"] = ts_str # Fallback
+        
         call_id_val = (
             flat_row.get("attributes.context.callID")
             or flat_row.get("attributes.context.callId")
@@ -69,6 +86,10 @@ def process_rum_events(all_events: List[Dict[str, Any]], tz_name="Asia/Seoul") -
             flat_row.pop("attributes.context.callID", None)
             flat_row.pop("attributes.context.callId", None)
             # flat_row.pop("attributes.context.CallIDs", None)
+        
+        # Inject Related Call ID if present (added by app.py)
+        if "_session_context_call_id" in event:
+            flat_row["Related Call ID"] = event["_session_context_call_id"]
 
         processed_rows.append(flat_row)
     return processed_rows
@@ -79,6 +100,7 @@ def summarize_calls(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
     RUM 이벤트를 Call ID별로 그룹화하고 통화 정보를 요약합니다.
     - 종료 사유, 패킷 정보, 주요 이벤트 상태 코드를 추출하여 요약 테이블을 생성합니다.
     """
+    print("DEBUG | summarize_calls called")
     calls = defaultdict(list)
     for row in flat_rows:
         call_id = row.get("Call ID")
@@ -197,6 +219,7 @@ def summarize_calls(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
 
 def to_base_dataframe(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
     """평탄화된 행 목록으로부터 DataFrame을 생성하고, 데이터 타입을 변환한 후 시간순으로 정렬합니다."""
+    print("DEBUG | to_base_dataframe called")
     df = pd.DataFrame(flat_rows)
 
     for col in ["attributes.resource.status_code", "attributes.resource.duration"]:
@@ -223,6 +246,7 @@ def apply_view_filters(
     데이터프레임에 뷰 관련 필터(희소 열 숨김, 사용자 지정 숨김)를 적용합니다.
     - auto_hide_sparse: True일 경우, 값이 거의 없는 열(희소 열)을 자동으로 숨깁니다. 기본값은 False입니다.
     """
+    print("DEBUG | apply_view_filters called")
     hidden_cols = hidden_cols or []
     if auto_hide_sparse and sparse_threshold > 0 and not df_view.empty:
         non_empty_ratio = (df_view.notna() & (df_view != "")).mean(numeric_only=False)
@@ -246,6 +270,7 @@ def analyze_rtp_timeouts(flat_rows: List[Dict[str, Any]]) -> pd.DataFrame:
     - 통화 유지 시간 (ACTIVE ~ STOPPING)을 계산합니다.
     - BYE 메시지의 출처(longRes, restReq 등)를 분석합니다.
     """
+    print("DEBUG | analyze_rtp_timeouts called")
     rtp_timeout_call_ids = set()
     for row in flat_rows:
         reason = row.get("attributes.context.reason", "")
@@ -424,6 +449,7 @@ def categorize_rtp_timeouts(summary_df: pd.DataFrame) -> Dict[str, pd.DataFrame]
     - 앱 버전별 발생 건수
     - 통화 시간대별 발생 건수
     """
+    print("DEBUG | categorize_rtp_timeouts called")
     if summary_df.empty:
         return {
             "by_user": pd.DataFrame(),
@@ -470,10 +496,86 @@ def categorize_rtp_timeouts(summary_df: pd.DataFrame) -> Dict[str, pd.DataFrame]
     }
 
 
+
+def analyze_call_sessions(flat_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    플랫팅된 이벤트 목록에서 통화 세션을 식별합니다.
+    - Start(발신): /res/requestVoiceCall
+    - Start(착신): pushReceived (message) or /res/notifyPushCall
+    - End: /res/SDK_CALL_STATUS_STOPPING
+    """
+    print("DEBUG | analyze_call_sessions called")
+    calls = defaultdict(list)
+    for row in flat_rows:
+        call_id = row.get("Call ID")
+        if call_id:
+            calls[call_id].append(row)
+
+    sessions = []
+    for call_id, events in calls.items():
+        # events are usually sorted descending by timestamp if coming from to_base_dataframe
+        # BUT search_rum_events returns them in a list, we should sort them by timestamp ascending to find start/end easily
+        
+        # Sort events by timestamp(KST) string for processing order
+        sorted_events = sorted(events, key=lambda x: x.get("timestamp(KST)", ""))
+
+        start_time_kst = None
+        end_time_kst = None
+        usr_id = None
+        
+        # Determine User ID from any event that has it
+        for event in sorted_events:
+            if event.get("attributes.usr.id"):
+                usr_id = event.get("attributes.usr.id")
+                # Break early or keep looking? usually same user for a call.
+                if usr_id:
+                    break
+        
+        # Determine Start/End Time
+        for event in sorted_events:
+            path = event.get("attributes.resource.url_path", "")
+            message = event.get("message", "")
+            
+            # 발신 시작: requestVoiceCall
+            if "/res/requestVoiceCall" in path:
+                if start_time_kst is None: # First occurrence as start
+                    start_time_kst = event.get("timestamp(KST)")
+            
+            # 착신 시작: pushReceived or notifyPushCall
+            if "pushReceived" in message or "/res/notifyPushCall" in path:
+                 if start_time_kst is None:
+                    start_time_kst = event.get("timestamp(KST)")
+            
+            # 종료: SDK_CALL_STATUS_STOPPING
+            if "/res/SDK_CALL_STATUS_STOPPING" in path:
+                end_time_kst = event.get("timestamp(KST)") # Keep updating to find the LAST stop if multiple? Usually one per call.
+        
+        # If we found at least a start or end, it's a session worth looking at.
+        # But for re-querying, we ideally need valid time ranges.
+        # If End is missing, maybe use the last event time?
+        # If Start is missing, maybe used first event time?
+        
+        if not start_time_kst and sorted_events:
+            start_time_kst = sorted_events[0].get("timestamp(KST)")
+        if not end_time_kst and sorted_events:
+            end_time_kst = sorted_events[-1].get("timestamp(KST)")
+            
+        if start_time_kst and end_time_kst:
+             sessions.append({
+                "Call ID": call_id,
+                "User ID": usr_id,
+                "Start Time": start_time_kst,
+                "End Time": end_time_kst
+            })
+            
+    return sessions
+
+
 def filter_dataframe(df: pd.DataFrame, column: str, filter_text: str, is_and: bool) -> pd.DataFrame:
     """
     주어진 조건에 따라 데이터프레임을 필터링합니다.
     """
+    print("DEBUG | filter_dataframe called")
     if column not in df.columns:
         st.warning(f"'{column}' 컬럼이 없어 필터링할 수 없습니다.")
         return df

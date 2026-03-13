@@ -96,7 +96,7 @@ def render_sidebar(ss, pin_count, fixed_pin):
         st.markdown("### 분석 유형")
         ss.analysis_type = st.radio(
             "분석 유형 선택",
-            ["User ID 분석", "RTP Timeout 분석", "Custom Query 분석"],
+            ["User ID 분석", "RTP Timeout 분석", "RTP Timeout 분석(New)", "Custom Query 분석", "Call Session 분석"],
             label_visibility="collapsed",
             key="analysis_type_radio" # 위젯 키를 통해 상태 유지
         )
@@ -109,11 +109,14 @@ def render_sidebar(ss, pin_count, fixed_pin):
         if ss.analysis_type == "User ID 분석":
             st.markdown("### 검색 조건")
             usr_id = st.text_input("usr.id", value="", placeholder="예: user_1234 (비우면 전체 *)")
-        elif ss.analysis_type == "RTP Timeout 분석":
+        elif ss.analysis_type == "RTP Timeout 분석" or ss.analysis_type == "RTP Timeout 분석(New)":
             st.markdown("### 검색 조건")
             usr_id = st.text_input("usr.id (쉼표로 구분)", value="", placeholder="예: id1,id2 (비우면 전체)")
             version_value = st.text_input("version (쉼표로 구분)", value="", placeholder="예: 1.0.0,1.0.1 (비우면 전체)")
             build_version_value = st.text_input("build_version (쉼표로 구분)", value="", placeholder="예: 100,101 (비우면 전체)")
+        elif ss.analysis_type == "Call Session 분석":
+             st.markdown("### 검색 조건")
+             usr_id = st.text_input("usr.id (Optional for filtering)", value="", placeholder="예: user_1234 (비우면 모든 통화 검색)")
 
         kst = pytz.timezone("Asia/Seoul")
         st.markdown("##### 검색 기간 (KST)")
@@ -133,13 +136,16 @@ def render_sidebar(ss, pin_count, fixed_pin):
         run_search = False
         run_rtp_analysis = False
         run_custom_query = False
+        run_call_session_analysis = False
 
         if ss.analysis_type == "User ID 분석":
             run_search = st.button("조회", disabled=not is_valid_time)
-        elif ss.analysis_type == "RTP Timeout 분석":
+        elif ss.analysis_type == "RTP Timeout 분석" or ss.analysis_type == "RTP Timeout 분석(New)":
             run_rtp_analysis = st.button("RTP Timeout 분석", disabled=not is_valid_time)
         elif ss.analysis_type == "Custom Query 분석":
             run_custom_query = st.button("조회", disabled=not is_valid_time)
+        elif ss.analysis_type == "Call Session 분석":
+            run_call_session_analysis = st.button("Call Session 분석", disabled=not is_valid_time)
 
         st.divider()
         st.markdown("### 표시 옵션")
@@ -160,7 +166,7 @@ def render_sidebar(ss, pin_count, fixed_pin):
         "max_pages": 20,
         "analysis_type": ss.analysis_type
     }
-    return run_search, run_rtp_analysis, run_custom_query, search_params
+    return run_search, run_rtp_analysis, run_custom_query, run_call_session_analysis, search_params
 
 def render_options_sidebar(ss, pin_count, fixed_pin):
     """사이드바에 표시 옵션(열 숨김, 핀 설정 등)을 렌더링합니다."""
@@ -204,6 +210,8 @@ def render_options_sidebar(ss, pin_count, fixed_pin):
 
 def render_main_view(ss, fixed_pin):
     """메인 화면(통화 분석, 이벤트 로그)을 렌더링합니다."""
+    print("[App] render_main_view called")
+    
     # Custom Query 분석 시, 검색창을 메인 뷰에 표시
     if ss.analysis_type == "Custom Query 분석":
         st.markdown("### 검색 조건")
@@ -254,6 +262,17 @@ def render_main_view(ss, fixed_pin):
         else:
             selected_call_id = "전체"
         
+        # Call ID 선택 시 피드백 (Toast & Log)
+        if ss.analysis_type == "RTP Timeout 분석(New)":
+            if selected_call_id != "전체":
+                if ss.get("last_selected_call_id") != selected_call_id:
+                    msg = f"선택한 Call ID({selected_call_id})로 로그를 상세 필터링 중입니다..."
+                    st.toast(msg)
+                    print(f"[App] {msg}")
+                    ss.last_selected_call_id = selected_call_id
+            else:
+                 ss.last_selected_call_id = "전체"
+        
         st.markdown("##### 행 하이라이트 (쉼표로 구분, OR 조건)")
         h_col1, h_col2, h_col3 = st.columns(3)
         red_kws = h_col1.text_input("🔴 빨강", placeholder="빨강으로 강조할 키워드")
@@ -265,18 +284,38 @@ def render_main_view(ss, fixed_pin):
         
         # Call ID 필터링 적용
         if selected_call_id != "전체":
-            df_render = df_render[df_render["Call ID"] == selected_call_id]
+            print(f"[App] Filtering by Call ID: {selected_call_id}")
+            if "Related Call ID" in df_render.columns:
+                cond1 = df_render["Call ID"] == selected_call_id
+                cond2 = df_render["Related Call ID"] == selected_call_id
+                df_render = df_render[cond1 | cond2]
+            else:
+                df_render = df_render[df_render["Call ID"] == selected_call_id]
+            print(f"[App] Filtered rows: {len(df_render)}")
 
         if filter_text:
             df_render = filter_dataframe(df_render, fixed_pin, filter_text, is_and)
 
+        # Row Limit for Performance (Prevent WebSocket Crash)
+        MAX_ROWS = 5000
+        if len(df_render) > MAX_ROWS:
+            st.warning(f"⚠️ 데이터가 너무 많아({len(df_render):,}행) 상위 {MAX_ROWS:,}개만 표시합니다. 전체 데이터 확인은 JSON 보기를 이용해주세요.")
+            df_render = df_render.head(MAX_ROWS)
+
         # 하이라이트 적용
-        styler = apply_row_highlighting(df_render, red_kws, blue_kws, yellow_kws)
+        print("[App] Applying highlights/styles...")
+        if len(df_render) > 3000 and any([red_kws, blue_kws, yellow_kws]):
+             st.warning(f"데이터가 많아({len(df_render)}행) 하이라이트 기능이 비활성화됩니다.")
+             styler = df_render.style
+        else:
+             styler = apply_row_highlighting(df_render, red_kws, blue_kws, yellow_kws)
+        print("[App] Style applied. Rendering dataframe...")
 
         if df_render.size > 262144:  # default is 2**18
             pd.set_option("styler.render.max_elements", df_render.size + 1)
 
         st.dataframe(styler, use_container_width=True, height=ss.table_height)
+        print("[App] Dataframe rendered.")
         
         with st.expander("원본 이벤트(JSON) 보기"):
             if st.checkbox("JSON 변환/표시"):

@@ -8,6 +8,7 @@ class Settings:
     api_key: str
     app_key: str
     site: str  # 예: "ap1.datadoghq.com", "datadoghq.com", "eu.datadoghq.com"
+    verify_ssl: bool = True
 
 def get_settings() -> Settings:
     """
@@ -17,7 +18,16 @@ def get_settings() -> Settings:
     api_key = st.secrets.get("DD_API_KEY", os.getenv("DD_API_KEY", ""))
     app_key = st.secrets.get("DD_APP_KEY", os.getenv("DD_APP_KEY", ""))
     site = st.secrets.get("DD_SITE", os.getenv("DD_SITE", "datadoghq.com"))
-    return Settings(api_key=api_key, app_key=app_key, site=site)
+    
+    # SSL 검증 설정 (기본값 True)
+    # .streamlit/secrets.toml 예시: DD_VERIFY_SSL = false
+    verify_ssl = st.secrets.get("DD_VERIFY_SSL", os.getenv("DD_VERIFY_SSL", True))
+    
+    # st.secrets에서 읽어오면 boolean일 수 있고, env에서 읽으면 string일 수 있음
+    if isinstance(verify_ssl, str):
+        verify_ssl = verify_ssl.lower() in ("true", "1", "yes")
+        
+    return Settings(api_key=api_key, app_key=app_key, site=site, verify_ssl=verify_ssl)
 
 def get_api_base(site: str) -> str:
     """Datadog API 기본 URL을 생성합니다."""
